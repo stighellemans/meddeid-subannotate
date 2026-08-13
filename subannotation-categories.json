@@ -1,0 +1,11 @@
+{
+  "general": ["formatting", "medical_info", "additional_info"],
+  "Name": ["name_identifier", "given", "family", "initials", "title"],
+  "Profession": ["hobby", "profession", "employment_state"],
+  "Organization": ["organization_identifier", "company", "institution", "hospital_location"],
+  "Address_Location": ["address_identifier", "country", "region", "municipality", "postal_code", "street", "house_number", "bus_number", "postal_office"],
+  "Contactdetails": ["contact_identifier", "internal_phone", "public_phone", "fax_number", "given", "family", "initials", "institution"],
+  "ID": ["id_identifier", "public_id", "internal_id"],
+  "Date": ["datetime_identifier", "day", "week", "month", "year", "weekday", "time", "season"],
+  "Age_Birthdate": ["datetime_identifier", "day", "week", "month", "year", "weekday", "time", "age_type", "age_year", "age_month", "age_week", "age_day"]
+}

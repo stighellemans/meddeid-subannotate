@@ -1,0 +1,40 @@
+{
+  "name": "meddeid-subannotate",
+  "version": "0.1.0",
+  "description": "Local core-PII character subannotation for MedDeID gold data",
+  "private": true,
+  "author": "Stig Hellemans",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare:data": "node server/prepare-data.js",
+    "dev": "npm run prepare:data && concurrently \"PORT=8791 npm run dev:server\" \"VITE_API_PROXY_TARGET=http://localhost:8791 npm run dev:client -- --port 5181\"",
+    "dev:server": "node server/index.js",
+    "dev:client": "vite",
+    "start": "npm run prepare:data && node server/index.js",
+    "build": "vite build",
+    "test": "npm run test:node",
+    "test:node": "node --test \"tests/unit/**/*.test.js\"",
+    "test:unit": "node --test \"tests/unit/**/*.test.js\"",
+    "test:browser": "node tests/browser/smoke.mjs",
+    "taxonomy:sync": "python3 scripts/sync_taxonomy.py",
+    "rebase": "node scripts/rebase-subannotations.js",
+    "migrate:saves": "node scripts/rebase-subannotations.js",
+    "bundle": "node scripts/export-bundle.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.4.1",
+    "concurrently": "^9.1.2",
+    "playwright": "^1.59.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.2.1"
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "contract_version": 1,
+  "taxonomy_version": "ProductionLabels-v1.1",
+  "categories": [
+    "Name",
+    "Address_Location",
+    "Organization",
+    "ID",
+    "Age_Birthdate",
+    "Contactdetails",
+    "Date",
+    "Profession",
+    "Anonymize_Other"
+  ],
+  "subtypes": [
+    "Patient",
+    "Caregiver",
+    "Other",
+    "Healthcare"
+  ],
+  "subtypes_by_category": {
+    "Name": [
+      "Patient",
+      "Caregiver",
+      "Other"
+    ],
+    "Address_Location": [
+      "Patient",
+      "Caregiver",
+      "Other"
+    ],
+    "Organization": [
+      "Healthcare",
+      "Other"
+    ],
+    "ID": [
+      "Patient",
+      "Caregiver"
+    ],
+    "Age_Birthdate": [],
+    "Contactdetails": [],
+    "Date": [],
+    "Profession": [],
+    "Anonymize_Other": []
+  },
+  "entity_labels": [
+    "Address_Location:Caregiver",
+    "Address_Location:Other",
+    "Address_Location:Patient",
+    "Age_Birthdate",
+    "Anonymize_Other",
+    "Contactdetails",
+    "Date",
+    "ID:Caregiver",
+    "ID:Patient",
+    "Name:Caregiver",
+    "Name:Other",
+    "Name:Patient",
+    "Organization:Healthcare",
+    "Organization:Other",
+    "Profession"
+  ],
+  "model_entity_labels": [
+    "Address_Location:Caregiver",
+    "Address_Location:Other",
+    "Address_Location:Patient",
+    "Age_Birthdate",
+    "Contactdetails",
+    "Date",
+    "ID:Caregiver",
+    "ID:Patient",
+    "Name:Caregiver",
+    "Name:Other",
+    "Name:Patient",
+    "Organization:Healthcare",
+    "Organization:Other",
+    "Profession"
+  ]
+}
