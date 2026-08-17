@@ -24,7 +24,8 @@ RUN npm ci --omit=dev \
          fi; \
        fi \
     && rm -rf /tmp/meddeid-profile-packages \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/dist ./dist
 COPY server ./server
 COPY scripts ./scripts
@@ -34,4 +35,4 @@ RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 VOLUME ["/app/data"]
 EXPOSE 8787
-CMD ["npm", "start"]
+CMD ["sh", "-c", "node server/prepare-data.js && exec node server/index.js"]

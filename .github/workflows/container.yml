@@ -1,0 +1,128 @@
+name: Container
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - Dockerfile
+      - package.json
+      - package-lock.json
+      - src/**
+      - server/**
+      - scripts/**
+      - shared/**
+      - contracts/**
+      - .github/workflows/container.yml
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/meddeid-subannotate
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Verify tag matches application version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const version = require("./package.json").version;
+            const tag = process.env.RELEASE_TAG.replace(/^v/, "");
+            if (tag !== version) throw new Error(`tag ${tag} does not match ${version}`);
+          '
+      - name: Build local smoke image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: meddeid-subannotate:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Run hardened smoke test
+        run: |
+          printf '%s\n' '{"document_id":"smoke","text":"Geen PII.","spans":[],"annotated":true}' > smoke-annotations.jsonl
+          docker run --detach --name meddeid-subannotate-smoke \
+            --read-only \
+            --tmpfs /app/data:size=16m,noexec,nosuid,nodev,uid=1000,gid=1000,mode=0700 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --env MEDDEID_ANNOTATIONS_PATH=/input/annotations.jsonl \
+            --volume "$PWD/smoke-annotations.jsonl:/input/annotations.jsonl:ro" \
+            meddeid-subannotate:ci
+          for attempt in $(seq 1 30); do
+            docker exec meddeid-subannotate-smoke node -e \
+              "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)})" \
+              && break
+            sleep 1
+          done
+          docker exec meddeid-subannotate-smoke node -e \
+            "fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)})"
+          test "$(docker inspect --format '{{.Config.User}}' meddeid-subannotate-smoke)" = node
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' meddeid-subannotate-smoke)" = true
+      - name: Reject fixable high or critical vulnerabilities
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --timeout 10m meddeid-subannotate:ci
+      - name: Show logs on failure
+        if: failure()
+        run: docker logs meddeid-subannotate-smoke || true
+      - name: Clean up smoke resources
+        if: always()
+        run: docker rm --force meddeid-subannotate-smoke 2>/dev/null || true
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - name: Build and publish multi-architecture image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          provenance: mode=max
+          sbom: true
+      - name: Attest published image
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
