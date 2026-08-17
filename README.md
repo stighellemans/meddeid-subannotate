@@ -143,14 +143,19 @@ hashes, and exact offset coverage.
 
 ## Docker
 
-Mount the primary gold file read-only and keep the writable workspace separate:
+The released neutral-profile container is the default route; no source checkout
+or Node.js installation is required. Mount the primary gold file read-only and
+keep the writable workspace separate:
 
 ```bash
-docker build -t meddeid-subannotate .
+docker pull ghcr.io/stighellemans/meddeid-subannotate:0.1.0
+mkdir -p subannotation-data
 docker run --rm -p 127.0.0.1:8787:8787 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
   -e MEDDEID_ANNOTATIONS_PATH=/input/annotations.jsonl \
   -v "$PWD/annotations.jsonl:/input/annotations.jsonl:ro" \
-  -v "$PWD/subannotation-data:/app/data" meddeid-subannotate
+  -v "$PWD/subannotation-data:/app/data" \
+  ghcr.io/stighellemans/meddeid-subannotate:0.1.0
 ```
 
 The application does not provide authentication; keep it on localhost or place
@@ -167,7 +172,7 @@ docker build \
 
 docker run --rm \
   -v "$PWD/subannotation-data:/app/data" \
-  meddeid-subannotate:nl-be npm run profile -- set nl-BE@1
+  meddeid-subannotate:nl-be node scripts/configure-profile.js set nl-BE@1
 ```
 
 For a published profile, pass an immutable npm or Git package spec instead:
@@ -179,7 +184,7 @@ docker build \
 
 docker run --rm \
   -v "$PWD/subannotation-data:/app/data" \
-  meddeid-subannotate:fr npm run profile -- set fr-FR@1
+  meddeid-subannotate:fr node scripts/configure-profile.js set fr-FR@1
 ```
 
 The normal application container can then be started without a profile
