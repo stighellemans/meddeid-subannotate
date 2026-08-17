@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { codePointSlice } from '../shared/unicode-offsets.js';
 
-const SYNTHETIC_BENCHMARK_FILENAME = 'meddeid-dutch-synthetic-benchmark.jsonl';
+const BENCHMARK_FILENAME = 'benchmark.jsonl';
 
 function parseJsonLines(text) {
   return String(text ?? '').split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
@@ -39,6 +39,7 @@ export async function writeEvaluationBundle({
   subannotationsPath,
   items,
   savesByItemId,
+  subannotationProfile,
 }) {
   const incomplete = items.filter((item) => {
     const saved = savesByItemId.get(item.itemId);
@@ -87,7 +88,7 @@ export async function writeEvaluationBundle({
   });
 
   await fs.mkdir(outputDir, { recursive: true });
-  const benchmarkPath = path.join(outputDir, SYNTHETIC_BENCHMARK_FILENAME);
+  const benchmarkPath = path.join(outputDir, BENCHMARK_FILENAME);
   await fs.writeFile(
     benchmarkPath,
     `${benchmarkRows.map((row) => JSON.stringify(row)).join('\n')}\n`,
@@ -100,8 +101,10 @@ export async function writeEvaluationBundle({
       schema_version: 'meddeid.schema.v1',
       offset_unit: 'unicode_codepoints',
       span_identity: 'sha256(document_id,begin,end,label)',
+      subannotation_profile: subannotationProfile.contractVersion,
     },
-    files: { benchmark: SYNTHETIC_BENCHMARK_FILENAME },
+    subannotation_profile: subannotationProfile,
+    files: { benchmark: BENCHMARK_FILENAME },
     hashes: {
       annotation_source_state_sha256: await sha256(sourceStatePath),
       source_annotations_sha256: await sha256(inputPath),
@@ -125,7 +128,7 @@ export async function writeEvaluationBundle({
     },
     evaluation: {
       package: 'meddeid-eval',
-      command: `meddeid-eval score --gold ${SYNTHETIC_BENCHMARK_FILENAME} --predictions predictions.jsonl`,
+      command: `meddeid-eval score --gold ${BENCHMARK_FILENAME} --predictions predictions.jsonl`,
     },
   };
   await fs.writeFile(

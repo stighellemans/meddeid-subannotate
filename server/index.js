@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createProjectStore } from './project-store.js';
+import { resolveWorkspaceSubannotationProfile } from './profile-configuration.js';
 import { discoverCurrentAnnotations } from './primary-gold-source.js';
 import { rebaseSubannotations } from '../scripts/rebase-subannotations.js';
 
@@ -19,7 +20,16 @@ const DATA_DIR = process.env.MEDDEID_DATA_DIR
   : path.join(rootDir, 'data');
 
 async function main() {
-  let store = await createProjectStore({ rootDir, dataDir: DATA_DIR });
+  const profileResolution = await resolveWorkspaceSubannotationProfile({
+    rootDir,
+    dataDir: DATA_DIR,
+  });
+  const subannotationProfile = profileResolution.profile;
+  let store = await createProjectStore({
+    rootDir,
+    dataDir: DATA_DIR,
+    subannotationProfile,
+  });
   let rebaseInProgress = false;
   const app = express();
 
@@ -87,6 +97,7 @@ async function main() {
         dataDir: DATA_DIR,
         annotationsPath: latest.annotationsPath,
         write: false,
+        subannotationProfile,
       });
       res.json({
         upToDate: false,
@@ -125,8 +136,13 @@ async function main() {
         dataDir: DATA_DIR,
         annotationsPath: latest.annotationsPath,
         write: true,
+        subannotationProfile,
       });
-      const nextStore = await createProjectStore({ rootDir, dataDir: DATA_DIR });
+      const nextStore = await createProjectStore({
+        rootDir,
+        dataDir: DATA_DIR,
+        subannotationProfile,
+      });
       store = nextStore;
       res.json({
         report: result.report,
@@ -250,6 +266,10 @@ async function main() {
 
   app.listen(PORT, HOST, () => {
     console.log(`MedDeID Subannotate listening on http://${HOST}:${PORT}`);
+    console.log(
+      `Subannotation profile: ${profileResolution.selection} ` +
+      `(${profileResolution.selectionSource})`,
+    );
   });
 }
 

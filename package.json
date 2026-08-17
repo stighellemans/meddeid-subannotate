@@ -11,6 +11,7 @@
   },
   "scripts": {
     "prepare:data": "node server/prepare-data.js",
+    "profile": "node scripts/configure-profile.js",
     "dev": "npm run prepare:data && concurrently \"PORT=8791 npm run dev:server\" \"VITE_API_PROXY_TARGET=http://localhost:8791 npm run dev:client -- --port 5181\"",
     "dev:server": "node server/index.js",
     "dev:client": "vite",

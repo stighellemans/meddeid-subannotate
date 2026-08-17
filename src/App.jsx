@@ -345,6 +345,7 @@ function normalizeDocumentMetadata(doc) {
     patientLastName: normalizeMetadataValue(doc?.patientLastName),
     patientBirthdate: normalizeMetadataValue(doc?.patientBirthdate),
     textCreationDate: normalizeMetadataValue(doc?.textCreationDate),
+    language: normalizeMetadataValue(doc?.language),
   };
 }
 
@@ -1964,6 +1965,10 @@ function App() {
       reviewBegin: activeItem.reviewBegin,
       reviewEnd: activeItem.reviewEnd,
       triggerRange: selection,
+      formattingPolicy:
+        bootstrapMeta?.subannotationProfile?.formattingPolicy,
+      formattingCategory:
+        bootstrapMeta?.subannotationProfile?.formattingCategory,
     });
     if (!categories.includes(category)) {
       setCategories((prev) =>
@@ -3857,6 +3862,18 @@ function App() {
                   <div className="metadata-entry">
                     <span>Date of text creation</span>
                     <strong>{activeDocMetadata.textCreationDate}</strong>
+                  </div>
+                  <div className="metadata-entry">
+                    <span>Document language</span>
+                    <strong>{activeDocMetadata.language}</strong>
+                  </div>
+                  <div className="metadata-entry">
+                    <span>Subannotation profile</span>
+                    <strong>
+                      {bootstrapMeta?.subannotationProfile
+                        ? `${bootstrapMeta.subannotationProfile.profileId}@${bootstrapMeta.subannotationProfile.profileVersion}`
+                        : METADATA_FILLER}
+                    </strong>
                   </div>
                 </div>
                 <div className="metadata-annotations-section">

@@ -48,10 +48,16 @@ function findSegmentCoveringIndex(segments, index) {
   return null;
 }
 
-function splitFormattingInsideSegments({ segments, reviewText, reviewBegin }) {
+function splitFormattingInsideSegments({
+  segments,
+  reviewText,
+  reviewBegin,
+  formattingPolicy,
+  formattingCategory,
+}) {
   const result = [];
   for (const segment of segments) {
-    if (segment.category === FORMATTING_CATEGORY) {
+    if (segment.category === formattingCategory) {
       result.push({ ...segment });
       continue;
     }
@@ -61,6 +67,7 @@ function splitFormattingInsideSegments({ segments, reviewText, reviewBegin }) {
     const segmentText = codePointSlice(reviewText, localBegin, localEnd);
     const formattingRuns = findFormattingRuns(segmentText, {
       category: segment.category,
+      policy: formattingPolicy,
     });
     if (formattingRuns.length === 0) {
       result.push({ ...segment });
@@ -79,7 +86,7 @@ function splitFormattingInsideSegments({ segments, reviewText, reviewBegin }) {
       result.push({
         begin: segment.begin + run.start,
         end: segment.begin + run.end,
-        category: FORMATTING_CATEGORY,
+        category: formattingCategory,
       });
       cursor = run.end;
     }
@@ -100,6 +107,8 @@ function collectBoundaryFormattingSegments({
   reviewBegin,
   reviewEnd,
   triggerRange,
+  formattingPolicy,
+  formattingCategory,
 }) {
   if (!triggerRange) return [];
 
@@ -111,7 +120,7 @@ function collectBoundaryFormattingSegments({
   while (leftCursor >= reviewBegin) {
     if (findSegmentCoveringIndex(segments, leftCursor)) break;
     const char = reviewText[leftCursor - reviewBegin];
-    if (!isFormattingChar(char)) break;
+    if (!isFormattingChar(char, formattingPolicy)) break;
     leftCursor -= 1;
   }
   const leftRunBegin = leftCursor + 1;
@@ -119,7 +128,7 @@ function collectBoundaryFormattingSegments({
     runs.push({
       begin: leftRunBegin,
       end: triggerRange.begin,
-      category: FORMATTING_CATEGORY,
+      category: formattingCategory,
     });
   }
 
@@ -127,14 +136,14 @@ function collectBoundaryFormattingSegments({
   while (rightCursor < reviewEnd) {
     if (findSegmentCoveringIndex(segments, rightCursor)) break;
     const char = reviewText[rightCursor - reviewBegin];
-    if (!isFormattingChar(char)) break;
+    if (!isFormattingChar(char, formattingPolicy)) break;
     rightCursor += 1;
   }
   if (rightStart < rightCursor) {
     runs.push({
       begin: rightStart,
       end: rightCursor,
-      category: FORMATTING_CATEGORY,
+      category: formattingCategory,
     });
   }
 
@@ -147,6 +156,8 @@ export function applyOnlineFormattingToSegments({
   reviewBegin,
   reviewEnd,
   triggerRange,
+  formattingPolicy,
+  formattingCategory = FORMATTING_CATEGORY,
 }) {
   const normalizedSegments = sortSegments(segments);
   if (normalizedSegments.length === 0) return [];
@@ -156,6 +167,8 @@ export function applyOnlineFormattingToSegments({
     segments: normalizedSegments,
     reviewText: text,
     reviewBegin: Number(reviewBegin ?? 0),
+    formattingPolicy,
+    formattingCategory,
   }).sort((a, b) => (a.begin - b.begin) || (a.end - b.end));
 
   const boundaryFormattingSegments = collectBoundaryFormattingSegments({
@@ -164,6 +177,8 @@ export function applyOnlineFormattingToSegments({
     reviewBegin: Number(reviewBegin ?? 0),
     reviewEnd: Number(reviewEnd ?? 0),
     triggerRange,
+    formattingPolicy,
+    formattingCategory,
   });
 
   return mergeAdjacentSegments(

@@ -6,23 +6,13 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { createProjectStore } from '../../server/project-store.js';
+import { neutralSubannotationProfile } from '../../server/subannotation-profile.js';
 
 const TAXONOMY = {
   contract_version: 1,
   taxonomy_version: 'test',
   entity_labels: ['Name:Patient', 'Contactdetails'],
 };
-
-const STARTING_CATEGORIES = `- general:
-    - formatting
-    - additional_info
-- Name:
-    - name_identifier
-    - given
-    - family
-- Contactdetails:
-    - contact_identifier
-`;
 
 function normalizedSpans(row) {
   return row.spans.map((span) => {
@@ -41,7 +31,6 @@ async function fixture(rows, { importedRows = null } = {}) {
   await fs.mkdir(path.join(rootDir, 'contracts'), { recursive: true });
   await fs.mkdir(path.join(rootDir, 'data'), { recursive: true });
   await fs.writeFile(path.join(rootDir, 'contracts', 'taxonomy.json'), JSON.stringify(TAXONOMY));
-  await fs.writeFile(path.join(rootDir, 'starting_categories.yaml'), STARTING_CATEGORIES);
   const annotationsPayload = `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`;
   await fs.writeFile(path.join(rootDir, 'data', 'annotations.jsonl'), annotationsPayload);
   await fs.writeFile(
@@ -158,7 +147,7 @@ test('gold-only store proposes, confirms, persists, and exports one evaluation b
     assert.equal(result.manifest.annotation_source.annotations_sha256.length, 64);
     assert.equal(result.manifest.hashes.annotation_source_state_sha256.length, 64);
     const benchmark = JSON.parse(
-      (await fs.readFile(path.join(rootDir, 'data', 'evaluation-bundle', 'meddeid-dutch-synthetic-benchmark.jsonl'), 'utf8')).trim(),
+      (await fs.readFile(path.join(rootDir, 'data', 'evaluation-bundle', 'benchmark.jsonl'), 'utf8')).trim(),
     );
     assert.equal(Object.hasOwn(benchmark, 'subannotations'), false);
     assert.equal(benchmark.spans[0].subannotations.length, 3);
@@ -363,9 +352,92 @@ test('canonical offsets count Unicode code points, including before a span', asy
     const exported = await store.exportEvaluationBundle();
     assert.equal(exported.manifest.counts.primary_gold_spans, 1);
     const benchmark = JSON.parse(
-      (await fs.readFile(path.join(rootDir, 'data', 'evaluation-bundle', 'meddeid-dutch-synthetic-benchmark.jsonl'), 'utf8')).trim(),
+      (await fs.readFile(path.join(rootDir, 'data', 'evaluation-bundle', 'benchmark.jsonl'), 'utf8')).trim(),
     );
     assert.equal(benchmark.spans[0].subannotations[0].text, 'Jan');
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('profile controls semantic rules, language validation, UI categories, and provenance', async () => {
+  const profile = {
+    ...neutralSubannotationProfile,
+    profileId: 'test-XX',
+    rulesetId: 'test-semantic-rules',
+    languageTags: ['xx'],
+    categoryGroups: { Name: ['person_part', 'layout'] },
+    formattingCategory: 'layout',
+    formattingPolicy: { symbols: ['~'], protectedDecimalCategories: [], decimalSeparators: [] },
+    seedCategories: { Name: 'person_part' },
+    autodetectCategories: ['person_part'],
+    rules: [{
+      ruleId: 'uppercase-person-part',
+      transformSegment({ segment }) {
+        return [{ ...segment, category: 'UPPER_PERSON' }];
+      },
+    }],
+  };
+  const rootDir = await fixture([{
+    document_id: 'profile-doc',
+    text: 'ALICE',
+    metadata: { lang: 'xx' },
+    spans: [{ begin: 0, end: 5, label: 'Name:Patient' }],
+  }]);
+  try {
+    const store = await createProjectStore({ rootDir, subannotationProfile: profile });
+    const bootstrap = await store.getBootstrap();
+    assert.equal(bootstrap.meta.subannotationProfile.profileId, 'test-XX');
+    assert.deepEqual(bootstrap.startingCategories, profile.categoryGroups);
+    assert.equal(bootstrap.documents[0].language, 'xx');
+    assert.deepEqual(
+      bootstrap.items[0].saved.segments,
+      [{ begin: 0, end: 5, category: 'UPPER_PERSON' }],
+    );
+
+    await store.saveItem({
+      itemId: bootstrap.items[0].itemId,
+      status: 'confirmed',
+      segments: [{ begin: 0, end: 5, category: 'UPPER_PERSON' }],
+    });
+    const saved = JSON.parse(await fs.readFile(
+      path.join(rootDir, 'data', 'subspan_annotations', 'documents', 'profile-doc.json'),
+      'utf8',
+    ));
+    assert.equal(saved.subannotationProfile.sha256, bootstrap.meta.subannotationProfile.sha256);
+
+    const exported = await store.exportEvaluationBundle();
+    assert.equal(exported.manifest.subannotation_profile.profileId, 'test-XX');
+    assert.equal(
+      exported.manifest.contracts.subannotation_profile,
+      'meddeid.subannotation-profile.v1',
+    );
+    await assert.rejects(
+      createProjectStore({ rootDir }),
+      /belongs to subannotation profile test-XX@1/,
+    );
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('language-specific profile rejects incompatible document metadata', async () => {
+  const profile = {
+    ...neutralSubannotationProfile,
+    profileId: 'test-XX',
+    languageTags: ['xx'],
+  };
+  const rootDir = await fixture([{
+    document_id: 'wrong-language',
+    text: 'Jan',
+    metadata: { lang: 'nl' },
+    spans: [{ begin: 0, end: 3, label: 'Name:Patient' }],
+  }]);
+  try {
+    await assert.rejects(
+      createProjectStore({ rootDir, subannotationProfile: profile }),
+      /language "nl" is incompatible/,
+    );
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

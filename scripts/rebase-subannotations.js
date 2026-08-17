@@ -6,6 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createProjectStore } from '../server/project-store.js';
+import { resolveWorkspaceSubannotationProfile } from '../server/profile-configuration.js';
+import {
+  describeSubannotationProfile,
+  neutralSubannotationProfile,
+} from '../server/subannotation-profile.js';
 
 const SAVE_VERSION = 1;
 const DEFAULT_MIN_SCORE = 350;
@@ -336,7 +341,13 @@ function docSaveFilename(documentId) {
   return `${documentId}.json`;
 }
 
-export async function migrateSaves({ dataDir, minScore = DEFAULT_MIN_SCORE, write = false }) {
+export async function migrateSaves({
+  dataDir,
+  minScore = DEFAULT_MIN_SCORE,
+  write = false,
+  subannotationProfile = neutralSubannotationProfile,
+}) {
+  const profileDescriptor = describeSubannotationProfile(subannotationProfile);
   const saveRoot = path.join(dataDir, 'subspan_annotations');
   const saveDocsDir = path.join(saveRoot, 'documents');
   await fs.mkdir(saveDocsDir, { recursive: true });
@@ -376,6 +387,26 @@ export async function migrateSaves({ dataDir, minScore = DEFAULT_MIN_SCORE, writ
       document_id: documentId,
       items: {},
     };
+    if (
+      !existingDoc.subannotationProfile?.sha256 &&
+      Object.keys(existingDoc.items ?? {}).length > 0 &&
+      profileDescriptor.profileId !== neutralSubannotationProfile.profileId
+    ) {
+      throw new Error(
+        `${documentId} contains legacy review work without language-profile provenance; ` +
+        'rebase it with neutral@1 before a separate, explicit profile migration',
+      );
+    }
+    if (
+      existingDoc.subannotationProfile?.sha256 &&
+      existingDoc.subannotationProfile.sha256 !== profileDescriptor.sha256
+    ) {
+      throw new Error(
+        `${documentId} belongs to subannotation profile ` +
+        `${existingDoc.subannotationProfile.profileId}@${existingDoc.subannotationProfile.profileVersion}, ` +
+        `not ${profileDescriptor.profileId}@${profileDescriptor.profileVersion}`,
+      );
+    }
     const savedEntries = Object.entries(existingDoc.items ?? {});
     const currentItems = currentItemsByDoc.get(documentId) ?? [];
     summary.savedItems += savedEntries.length;
@@ -441,6 +472,7 @@ export async function migrateSaves({ dataDir, minScore = DEFAULT_MIN_SCORE, writ
       primaryGold: {
         annotationsSha256: targetState?.hashes?.annotations_sha256 ?? null,
       },
+      subannotationProfile: profileDescriptor,
       updatedAt: new Date().toISOString(),
       items: nextItems,
     };
@@ -616,6 +648,7 @@ export async function rebaseSubannotations(options) {
     annotationsPath: options.annotationsPath ? path.resolve(options.annotationsPath) : null,
     write: Boolean(options.write),
     minScore: options.minScore ?? DEFAULT_MIN_SCORE,
+    subannotationProfile: options.subannotationProfile ?? neutralSubannotationProfile,
   };
   const stageParent = await fs.mkdtemp(path.join(os.tmpdir(), 'meddeid-rebase-'));
   const stageDir = path.join(stageParent, 'data');
@@ -623,8 +656,17 @@ export async function rebaseSubannotations(options) {
     await stageWorkspace(args, stageDir);
     const previousState = await readJson(path.join(args.dataDir, 'annotation-source-state.json')).catch(() => null);
     const targetState = await readJson(path.join(stageDir, 'annotation-source-state.json'));
-    const migration = await migrateSaves({ dataDir: stageDir, minScore: args.minScore, write: true });
-    const stagedStore = await createProjectStore({ rootDir: args.rootDir, dataDir: stageDir });
+    const migration = await migrateSaves({
+      dataDir: stageDir,
+      minScore: args.minScore,
+      write: true,
+      subannotationProfile: args.subannotationProfile,
+    });
+    const stagedStore = await createProjectStore({
+      rootDir: args.rootDir,
+      dataDir: stageDir,
+      subannotationProfile: args.subannotationProfile,
+    });
     await stagedStore.getBootstrap();
     const stamp = timestamp();
     const report = {
@@ -660,6 +702,12 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
     if (args.help) {
       printHelp();
     } else {
+      args.subannotationProfile = (
+        await resolveWorkspaceSubannotationProfile({
+          rootDir: args.rootDir,
+          dataDir: args.dataDir,
+        })
+      ).profile;
       const result = await rebaseSubannotations(args);
       console.log(
         `${args.write ? 'Rebase complete' : 'Dry run only'}: ` +

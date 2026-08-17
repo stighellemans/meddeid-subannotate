@@ -80,3 +80,24 @@ test('keeps decimal commas inside age value segments', () => {
     { begin: 0, end: 4, category: 'age_year' },
   ]);
 });
+
+test('uses a profile-defined formatting category and symbol policy', () => {
+  const result = applyOnlineFormattingToSegments({
+    segments: [{ begin: 0, end: 3, category: 'person_part' }],
+    reviewText: 'A~B',
+    reviewBegin: 0,
+    reviewEnd: 3,
+    triggerRange: { begin: 0, end: 3 },
+    formattingCategory: 'layout',
+    formattingPolicy: {
+      symbols: ['~'],
+      protectedDecimalCategories: [],
+      decimalSeparators: [],
+    },
+  });
+  assert.deepEqual(result, [
+    { begin: 0, end: 1, category: 'person_part' },
+    { begin: 1, end: 2, category: 'layout' },
+    { begin: 2, end: 3, category: 'person_part' },
+  ]);
+});

@@ -1,17 +1,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { FORMATTING_CATEGORY } from '../shared/formatting-symbols.js';
 import { codePointLength, codePointSlice } from '../shared/unicode-offsets.js';
+import { runSpanPreprocessorForItem } from './preprocessing/span-preprocessor.js';
 import {
-  ADDRESS_IDENTIFIER_CATEGORY,
-  CONTACT_IDENTIFIER_CATEGORY,
-  DATETIME_IDENTIFIER_CATEGORY,
-  ID_IDENTIFIER_CATEGORY,
-  NAME_IDENTIFIER_CATEGORY,
-  ORGANIZATION_IDENTIFIER_CATEGORY,
-  runSpanPreprocessorForItem,
-} from './preprocessing/span-preprocessor.js';
+  assertProfileAcceptsLanguage,
+  describeSubannotationProfile,
+  neutralSubannotationProfile,
+  validateSubannotationProfile,
+} from './subannotation-profile.js';
 import { writeEvaluationBundle } from './evaluation-bundle.js';
 
 const SAVE_VERSION = 1;
@@ -20,14 +17,6 @@ const IMPORTS_DIRNAME = 'imports';
 const CONFIRMED_IMPORT_FILENAME = 'confirmed_subannotations.jsonl';
 const CONFIRMED_IMPORT_LOCK_SOURCE = 'confirmed_import';
 const METADATA_FILLER = 'N/A';
-const AUTODETECT_PREPROCESSOR_CATEGORIES = Object.freeze([
-  NAME_IDENTIFIER_CATEGORY,
-  DATETIME_IDENTIFIER_CATEGORY,
-  ORGANIZATION_IDENTIFIER_CATEGORY,
-  ADDRESS_IDENTIFIER_CATEGORY,
-  ID_IDENTIFIER_CATEGORY,
-  CONTACT_IDENTIFIER_CATEGORY,
-]);
 
 function parseJsonLines(text) {
   return text
@@ -56,6 +45,7 @@ function normalizeMetadataValue(value) {
 
 function defaultDocumentMetadata() {
   return {
+    language: null,
     patientGivenName: METADATA_FILLER,
     patientLastName: METADATA_FILLER,
     patientBirthdate: METADATA_FILLER,
@@ -85,6 +75,7 @@ function parseTextRecord(rawValue) {
   const patient =
     rawValue.patient && typeof rawValue.patient === 'object' ? rawValue.patient : {};
   const metadata = {
+    language: String(rawValue.lang ?? rawValue.language ?? '').trim() || null,
     patientGivenName: normalizeMetadataValue(patient.given_name),
     patientLastName: normalizeMetadataValue(patient.family_name),
     patientBirthdate: normalizeMetadataValue(patient.birth_date),
@@ -119,71 +110,6 @@ function makeItemId(documentId, span) {
 
 function sanitizeCategory(input) {
   return String(input ?? '').trim();
-}
-
-function parseYamlScalar(rawValue) {
-  const value = String(rawValue ?? '').trim();
-  if (!value) return '';
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1).trim();
-  }
-  return value;
-}
-
-function parseStartingCategoryGroupsYaml(text) {
-  const groups = {};
-  let currentGroup = null;
-
-  for (const rawLine of String(text ?? '').split(/\r?\n/)) {
-    if (!rawLine.trim()) continue;
-    if (/^\s*#/.test(rawLine)) continue;
-
-    const indent = rawLine.match(/^\s*/)?.[0]?.length ?? 0;
-    const trimmed = rawLine.trim();
-
-    if (indent === 0) {
-      const topMatch = /^(?:-\s*)?([^:]+):\s*$/.exec(trimmed);
-      if (!topMatch) {
-        throw new Error(`Invalid top-level line: ${trimmed}`);
-      }
-      currentGroup = parseYamlScalar(topMatch[1]);
-      if (!currentGroup) {
-        throw new Error(`Empty group key in line: ${trimmed}`);
-      }
-      if (!Array.isArray(groups[currentGroup])) {
-        groups[currentGroup] = [];
-      }
-      continue;
-    }
-
-    if (!currentGroup) {
-      throw new Error(`Found category entry before a group header: ${trimmed}`);
-    }
-
-    const itemMatch = /^-\s+(.+?)\s*$/.exec(trimmed);
-    if (!itemMatch) {
-      throw new Error(`Invalid category entry line: ${trimmed}`);
-    }
-    const category = parseYamlScalar(itemMatch[1]);
-    if (category) {
-      groups[currentGroup].push(category);
-    }
-  }
-
-  for (const [group, entries] of Object.entries(groups)) {
-    const seen = new Set();
-    groups[group] = entries.filter((entry) => {
-      const key = sanitizeCategory(entry);
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  return groups;
 }
 
 function mergeAdjacentSegments(segments) {
@@ -651,7 +577,14 @@ async function loadConfirmedImportSegments(importPath) {
   };
 }
 
-export async function createProjectStore({ rootDir, dataDir: configuredDataDir } = {}) {
+export async function createProjectStore({
+  rootDir,
+  dataDir: configuredDataDir,
+  subannotationProfile = neutralSubannotationProfile,
+} = {}) {
+  const profile = validateSubannotationProfile(subannotationProfile);
+  const profileDescriptor = describeSubannotationProfile(profile);
+  const formattingCategory = profile.formattingCategory;
   const dataDir = configuredDataDir
     ? path.resolve(configuredDataDir)
     : process.env.MEDDEID_DATA_DIR
@@ -663,7 +596,6 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
   const bundleDir = path.join(dataDir, 'evaluation-bundle');
   const textsCachePath = path.join(dataDir, 'dataset_texts.json');
   const goldPath = path.join(dataDir, 'gold.jsonl');
-  const startingCategoriesPath = path.join(rootDir, 'starting_categories.yaml');
   const taxonomyPath = path.join(rootDir, 'contracts', 'taxonomy.json');
   const saveRoot = path.join(dataDir, SAVE_ROOT_DIRNAME);
   const saveDocsDir = path.join(saveRoot, 'documents');
@@ -729,6 +661,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
       throw new Error(`No text found in dataset_texts.json for ${documentId}`);
     }
     const documentMetadata = textPayload?.metadata ?? defaultDocumentMetadata();
+    assertProfileAcceptsLanguage(profile, documentMetadata.language, documentId);
 
     const goldSpans = goldByDoc.get(documentId) ?? [];
     const docItemIds = [];
@@ -798,19 +731,12 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
     return a.itemId.localeCompare(b.itemId);
   });
 
-  let startingCategoryGroups = {};
-  if (await fileExists(startingCategoriesPath)) {
-    try {
-      const yamlText = await fs.readFile(startingCategoriesPath, 'utf8');
-      startingCategoryGroups = parseStartingCategoryGroupsYaml(yamlText);
-    } catch (error) {
-      console.warn(
-        `Failed to read/parse ${path.relative(rootDir, startingCategoriesPath)}:`,
-        error instanceof Error ? error.message : String(error),
-      );
-      startingCategoryGroups = {};
-    }
-  }
+  const startingCategoryGroups = Object.fromEntries(
+    Object.entries(profile.categoryGroups).map(([group, groupCategories]) => [
+      group,
+      [...groupCategories],
+    ]),
+  );
 
   const startingCategoriesFlat = Array.from(
     new Set(
@@ -825,10 +751,37 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
   if (await fileExists(categoriesPath)) {
     try {
       const parsed = JSON.parse(await fs.readFile(categoriesPath, 'utf8'));
+      if (
+        parsed.subannotationProfile?.sha256 &&
+        parsed.subannotationProfile.sha256 !== profileDescriptor.sha256
+      ) {
+        const error = new Error(
+          `categories.json belongs to subannotation profile ` +
+          `${parsed.subannotationProfile.profileId}@${parsed.subannotationProfile.profileVersion}, not ` +
+          `${profileDescriptor.profileId}@${profileDescriptor.profileVersion}. ` +
+          'Run "npm run profile -- migrate <profile>@<version>" before switching profiles.',
+        );
+        error.code = 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH';
+        throw error;
+      }
+      if (
+        !parsed.subannotationProfile?.sha256 &&
+        Array.isArray(parsed.categories) &&
+        parsed.categories.length > 0 &&
+        profileDescriptor.profileId !== neutralSubannotationProfile.profileId
+      ) {
+        const error = new Error(
+          'categories.json contains legacy categories without profile provenance. ' +
+          'Run "npm run profile -- migrate <profile>@<version>" before enabling semantic rules.',
+        );
+        error.code = 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH';
+        throw error;
+      }
       if (Array.isArray(parsed.categories)) {
         categories = parsed.categories.map(sanitizeCategory).filter(Boolean);
       }
-    } catch {
+    } catch (error) {
+      if (error?.code === 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH') throw error;
       categories = [];
     }
   }
@@ -839,6 +792,31 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
     for (const filename of saveDocFiles) {
       try {
         const docSave = JSON.parse(await fs.readFile(path.join(saveDocsDir, filename), 'utf8'));
+        const savedProfile = docSave.subannotationProfile;
+        if (
+          !savedProfile?.sha256 &&
+          Object.keys(docSave.items ?? {}).length > 0 &&
+          profileDescriptor.profileId !== neutralSubannotationProfile.profileId
+        ) {
+          const error = new Error(
+            `${filename} contains legacy review work without language-profile provenance. ` +
+              `It can only be opened with neutral@1; use a separate MEDDEID_DATA_DIR or run ` +
+              '"npm run profile -- migrate <profile>@<version>" before enabling semantic rules.',
+          );
+          error.code = 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH';
+          throw error;
+        }
+        if (savedProfile?.sha256 && savedProfile.sha256 !== profileDescriptor.sha256) {
+          const error = new Error(
+            `${filename} belongs to subannotation profile ` +
+              `${savedProfile.profileId}@${savedProfile.profileVersion}, not ` +
+              `${profileDescriptor.profileId}@${profileDescriptor.profileVersion}. ` +
+              'Use a separate MEDDEID_DATA_DIR or run ' +
+              '"npm run profile -- migrate <profile>@<version>" to archive and reset the saved review work.',
+          );
+          error.code = 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH';
+          throw error;
+        }
         const savedPrimaryHash = String(docSave.primaryGold?.annotationsSha256 ?? '').trim();
         if (
           savedPrimaryHash &&
@@ -877,7 +855,10 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
           }
         }
       } catch (error) {
-        if (error?.code === 'MEDDEID_REBASE_REQUIRED') throw error;
+        if (
+          error?.code === 'MEDDEID_REBASE_REQUIRED' ||
+          error?.code === 'MEDDEID_SUBANNOTATION_PROFILE_MISMATCH'
+        ) throw error;
         // Ignore invalid save files so the app still opens.
       }
     }
@@ -903,6 +884,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
     const payload = {
       version: SAVE_VERSION,
       updatedAt: new Date().toISOString(),
+      subannotationProfile: profileDescriptor,
       categories: categories.slice().sort((a, b) => a.localeCompare(b)),
     };
     await fs.writeFile(categoriesPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
@@ -1077,35 +1059,8 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
   }
 
   function getSeedCategoryForAnnotation(annotation) {
-    const annotationCategory = String(annotation?.category ?? '')
-      .trim()
-      .toLowerCase();
-    const annotationSubtype = String(annotation?.subtype ?? '')
-      .trim()
-      .toLowerCase();
-
-    if (annotationCategory === 'date' || annotationCategory === 'age_birthdate') {
-      return DATETIME_IDENTIFIER_CATEGORY;
-    }
-    if (annotationCategory === 'name') {
-      return NAME_IDENTIFIER_CATEGORY;
-    }
-    if (annotationCategory === 'address_location') {
-      return ADDRESS_IDENTIFIER_CATEGORY;
-    }
-    if (
-      annotationCategory === 'organization' &&
-      (annotationSubtype === 'healthcare' || annotationSubtype === 'other' || !annotationSubtype)
-    ) {
-      return ORGANIZATION_IDENTIFIER_CATEGORY;
-    }
-    if (annotationCategory === 'contactdetails') {
-      return CONTACT_IDENTIFIER_CATEGORY;
-    }
-    if (annotationCategory === 'id') {
-      return ID_IDENTIFIER_CATEGORY;
-    }
-    return null;
+    const annotationCategory = String(annotation?.category ?? '').trim();
+    return profile.seedCategories[annotationCategory] ?? null;
   }
 
   function clipAnnotationRangeToItem(item, annotation) {
@@ -1239,7 +1194,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
 
   function scoreNonFormattingCoverage(segments) {
     return segments.reduce((covered, segment) => {
-      if (segment.category === FORMATTING_CATEGORY) return covered;
+      if (segment.category === formattingCategory) return covered;
       return covered + (segment.end - segment.begin);
     }, 0);
   }
@@ -1247,7 +1202,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
   function scoreNonFormattingCoverageInRange(range, segments) {
     if (!range) return 0;
     return segments.reduce((covered, segment) => {
-      if (segment.category === FORMATTING_CATEGORY) return covered;
+      if (segment.category === formattingCategory) return covered;
       const clippedBegin = Math.max(range.begin, segment.begin);
       const clippedEnd = Math.min(range.end, segment.end);
       if (clippedBegin >= clippedEnd) return covered;
@@ -1259,7 +1214,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
     const primaryRange = getPrimaryPreprocessorSeedRange(item);
     if (!primaryRange) return [];
 
-    return AUTODETECT_PREPROCESSOR_CATEGORIES.map((category, index) => ({
+    return profile.autodetectCategories.map((category, index) => ({
       source: `autodetect:${category}`,
       sourceRank: 2,
       sourceOrder: index,
@@ -1305,6 +1260,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
       const outcome = runSpanPreprocessorForItem({
         item,
         segments: normalizedInputSegments,
+        profile,
         includeTrace,
       });
       candidates.push({
@@ -1592,6 +1548,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
         annotationSource: {
           annotationsSha256: sourceState.hashes.annotations_sha256,
         },
+        subannotationProfile: profileDescriptor,
       },
       progress,
       documents: docs.map((doc) => ({
@@ -1601,6 +1558,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
         patientLastName: doc.metadata.patientLastName,
         patientBirthdate: doc.metadata.patientBirthdate,
         textCreationDate: doc.metadata.textCreationDate,
+        language: doc.metadata.language,
       })),
       startingCategories: Object.fromEntries(
         Object.entries(startingCategoryGroups).map(([group, groupCategories]) => [
@@ -1622,6 +1580,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
         primaryGold: {
           annotationsSha256: sourceState.hashes.annotations_sha256,
         },
+        subannotationProfile: profileDescriptor,
         updatedAt: null,
         items: {},
       };
@@ -1637,6 +1596,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
         primaryGold: {
           annotationsSha256: sourceState.hashes.annotations_sha256,
         },
+        subannotationProfile: profileDescriptor,
         updatedAt: parsed.updatedAt ?? null,
         items: parsed.items ?? {},
         ...(parsed.orphanedItems ? { orphanedItems: parsed.orphanedItems } : {}),
@@ -1648,6 +1608,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
         primaryGold: {
           annotationsSha256: sourceState.hashes.annotations_sha256,
         },
+        subannotationProfile: profileDescriptor,
         updatedAt: null,
         items: {},
       };
@@ -1895,6 +1856,7 @@ export async function createProjectStore({ rootDir, dataDir: configuredDataDir }
       subannotationsPath: outputPath,
       items,
       savesByItemId,
+      subannotationProfile: profileDescriptor,
     });
   }
 
