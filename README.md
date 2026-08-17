@@ -5,7 +5,7 @@ application creates an initial complete subdivision, lets a reviewer correct
 it, and exports confirmed nested subannotations for detailed evaluation. It
 does not change primary spans or create false-positive review items.
 
-See the [annotation workflow](https://meddeid.github.io/workflows/prepare-and-annotate/#6-add-core-pii-subannotations-only-for-evaluation)
+See the [annotation workflow](https://stighellemans.github.io/meddeid.github.io/workflows/prepare-and-annotate/#6-add-core-pii-subannotations-only-for-evaluation)
 for this tool's place in benchmark creation. This repository remains
 authoritative for subannotation, rebasing, and bundle export.
 
