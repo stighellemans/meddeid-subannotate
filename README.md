@@ -51,12 +51,11 @@ npm run profile -- set neutral@1
 npm run profile -- show
 ```
 
-For Dutch text in the Belgian context, install the JavaScript capability and
-select it. Until `@meddeid/language-nl` is published to npm, a suite source
-checkout can install the sibling package locally:
+For Dutch text in the Belgian context, install the published JavaScript
+capability and select it:
 
 ```bash
-npm install --no-save ../meddeid-language-nl
+npm install --no-save @meddeid/language-nl@0.1.0
 npm run profile -- set nl-BE@1
 npm run dev
 ```
